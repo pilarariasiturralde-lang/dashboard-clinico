@@ -126,13 +126,15 @@ def update(tab, dep, status, start, end):
         df_dep = dff.groupby("Department")["Wait_real"].mean().reset_index()
         df_dep = df_dep.sort_values("Wait_real", ascending=False)
 
-        # FORMATO
+        # FORMATO TIEMPO
         def fmt(x):
             return f"{int(x//60)}h {int(x%60)}m"
 
         df_dep["label"] = df_dep["Wait_real"].apply(fmt)
 
+        # =========================
         # GRÁFICO
+        # =========================
         fig = px.bar(
             df_dep,
             x="Department",
@@ -140,21 +142,26 @@ def update(tab, dep, status, start, end):
             text="label"
         )
 
+        # 🔥 CLAVE: mostrar etiquetas correctamente
         fig.update_traces(
             textposition="outside",
-            cliponaxis=False   # 🔑 evita que se corten las etiquetas
+            cliponaxis=False,
+            textfont=dict(size=11, color="black")
         )
+
+        # 🔥 CLAVE REAL: dar espacio arriba
+        max_y = df_dep["Wait_real"].max()
 
         fig.update_layout(
             title="Tiempo de espera promedio por Departamento",
             xaxis_title="Departamento",
             yaxis_title="Tiempo de Espera",
-            uniformtext_minsize=8,
-            uniformtext_mode="hide"
+            yaxis=dict(range=[0, max_y * 1.25]),  # 👈 SOLUCIÓN
+            margin=dict(t=100)
         )
 
         # =========================
-        # INSIGHTS PRO
+        # INSIGHTS AUTOMÁTICOS PRO
         # =========================
         top = df_dep.iloc[0]
         low = df_dep.iloc[-1]
