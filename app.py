@@ -5,15 +5,27 @@ import pandas as pd
 import plotly.express as px
 
 # =========================
-# CARGA Y LIMPIEZA
+# CONFIG
+# =========================
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        dbc.themes.LUX,
+        "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css"
+    ]
+)
+server = app.server
+
+# =========================
+# CARGA DE DATOS
 # =========================
 df = pd.read_csv("clinical_analytics.csv.gz", compression="gzip")
 
+# IMPORTANTE: COPIA ORIGINAL
+df_original = df.copy()
+
 df["Appt Start Time"] = pd.to_datetime(df["Appt Start Time"], errors="coerce")
 df["Discharge Datetime new"] = pd.to_datetime(df["Discharge Datetime new"], errors="coerce")
-
-df["Diagnosis Primary"] = df["Diagnosis Primary"].fillna("Unknown")
-df["Encounter Status"] = df["Encounter Status"].fillna("Desconocido")
 
 df["Duracion_min"] = (
     df["Discharge Datetime new"] - df["Appt Start Time"]
@@ -21,260 +33,353 @@ df["Duracion_min"] = (
 
 df = df[(df["Duracion_min"] >= 0) & (df["Duracion_min"] <= 43200)]
 
-# =========================
-# APP
-# =========================
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.LUX])
-server = app.server
+df["Department"] = df["Department"].fillna("Unknown")
+df["Encounter Status"] = df["Encounter Status"].fillna("Unknown")
+df["Diagnosis Primary"] = df["Diagnosis Primary"].fillna("Unknown")
 
+# =========================
+# KPI
+# =========================
+def kpi(icon, title, value, color, extra):
+    return dbc.Card(
+        dbc.CardBody([
+            html.I(className=icon, style={"fontSize": "28px", "color": color}),
+            html.H6(title, className="text-muted mt-2"),
+            html.H2(value, style={"fontWeight": "bold"}),
+            html.Small(extra, style={"color": color})
+        ]),
+        style={"borderRadius": "12px", "boxShadow": "0 4px 12px rgba(0,0,0,0.1)"}
+    )
+
+# =========================
+# LAYOUT
+# =========================
 app.layout = dbc.Container([
 
-    html.H2("Dashboard Clínico"),
+    html.Div([
+        html.H2("DASHBOARD CLÍNICO"),
+        html.P("Análisis de Tiempos, Ingresos, Calidad, Diagnósticos y Volumen de atenciones médicas")
+    ], style={
+        "background": "#0d6efd",
+        "color": "white",
+        "padding": "15px",
+        "borderRadius": "10px",
+        "marginBottom": "20px"
+    }),
 
-    # FILTROS
     dbc.Row([
         dbc.Col(dcc.Dropdown(
-            options=[{"label": i, "value": i} for i in df["Department"].dropna().unique()],
+            options=[{"label": i, "value": i} for i in sorted(df["Department"].unique())],
             multi=True, placeholder="Departamento", id="dep"
-        ), width=4),
-
+        )),
         dbc.Col(dcc.Dropdown(
-            options=[{"label": i, "value": i} for i in df["Encounter Status"].dropna().unique()],
+            options=[{"label": i, "value": i} for i in sorted(df["Encounter Status"].unique())],
             multi=True, placeholder="Estado", id="status"
-        ), width=4),
-
+        )),
         dbc.Col(dcc.DatePickerRange(
             start_date=df["Appt Start Time"].min(),
             end_date=df["Appt Start Time"].max(),
             id="fecha"
-        ), width=4)
+        ))
     ], className="mb-4"),
 
-    # KPIs
     dbc.Row([
+        dbc.Col(html.Div(id="kpi1"), width=4),
+        dbc.Col(html.Div(id="kpi2"), width=4),
+        dbc.Col(html.Div(id="kpi3"), width=4),
+    ], className="g-4 mb-4"),
 
-        dbc.Col(dbc.Card([
-            dbc.CardBody([
-                html.H6("Tiempo Promedio de Atención"),
-                html.H4(id="kpi_tiempo", style={"color": "#2c7be5"})
-            ])
-        ]), width=4),
-
-        dbc.Col(dbc.Card([
-            dbc.CardBody([
-                html.H6("Total Registros"),
-                html.H4(id="kpi_total")
-            ])
-        ]), width=4),
-
-        dbc.Col(dbc.Card([
-            dbc.CardBody([
-                html.H6("% Atenciones Canceladas"),
-                html.H4(id="kpi_cancel", style={"color": "red"})
-            ])
-        ]), width=4),
-
-    ], className="mb-4"),
-
-    # TABS
-    dbc.Tabs(id="tabs", children=[
-        dbc.Tab(label="Tiempos", tab_id="tab1"),
-        dbc.Tab(label="Ingresos", tab_id="tab2"),
-        dbc.Tab(label="Calidad", tab_id="tab3"),
-        dbc.Tab(label="Diagnósticos", tab_id="tab4"),
-        dbc.Tab(label="Volumen", tab_id="tab5"),
-    ]),
+    dbc.Tabs([
+        dbc.Tab(label="⏱ Tiempos", tab_id="tab1"),
+        dbc.Tab(label="📥 Ingresos", tab_id="tab2"),
+        dbc.Tab(label="⭐ Calidad", tab_id="tab3"),
+        dbc.Tab(label="🧠 Diagnósticos", tab_id="tab4"),
+        dbc.Tab(label="📈 Volumen", tab_id="tab5"),
+    ], id="tabs", active_tab="tab1"),
 
     html.Div(id="contenido")
 
-], fluid=True)
+], fluid=True, style={"backgroundColor": "#f4f6f9", "padding": "20px"})
 
 # =========================
 # CALLBACK
 # =========================
 @app.callback(
     Output("contenido", "children"),
-    Output("kpi_tiempo", "children"),
-    Output("kpi_total", "children"),
-    Output("kpi_cancel", "children"),
+    Output("kpi1", "children"),
+    Output("kpi2", "children"),
+    Output("kpi3", "children"),
     Input("tabs", "active_tab"),
     Input("dep", "value"),
     Input("status", "value"),
     Input("fecha", "start_date"),
     Input("fecha", "end_date")
 )
-def render(tab, dep, status, start, end):
+def update(tab, dep, status, start, end):
 
     dff = df.copy()
 
-    # filtros principales
     if dep:
         dff = dff[dff["Department"].isin(dep)]
-
     if status:
         dff = dff[dff["Encounter Status"].isin(status)]
 
     dff = dff[
-        (dff["Appt Start Time"] >= start) &
-        (dff["Appt Start Time"] <= end)
+        (dff["Appt Start Time"] >= pd.to_datetime(start)) &
+        (dff["Appt Start Time"] <= pd.to_datetime(end))
     ]
 
     if dff.empty:
-        return html.Div("No hay datos"), "-", "-", "-"
+        return "Sin datos", "-", "-", "-"
+
+    dff["Check-In Time"] = pd.to_datetime(dff["Check-In Time"], errors="coerce")
+
+    dff["Wait_real"] = (
+        dff["Appt Start Time"] - dff["Check-In Time"]
+    ).dt.total_seconds() / 60
+
+    dff = dff[dff["Wait_real"].notna()]
+    dff = dff[dff["Wait_real"] >= 0]
 
     # =========================
-    # KPI CORRECTO (sin sesgo por estado)
+    # KPI CALCULOS
     # =========================
-    dff_base = df.copy()
+    promedio = dff["Wait_real"].mean()
+    sla = (dff["Wait_real"] <= 60).mean() * 100
 
-    if dep:
-        dff_base = dff_base[dff_base["Department"].isin(dep)]
+    total_real = len(df_original)
 
-    dff_base = dff_base[
-        (dff_base["Appt Start Time"] >= start) &
-        (dff_base["Appt Start Time"] <= end)
-    ]
-
-    promedio = dff["Duracion_min"].mean()
-    total = len(dff)
-
-    cancel = dff["Encounter Status"].str.strip().str.lower().eq("cancelled").sum()
-    total = len(dff)
-
-    porc_cancel = (cancel / total * 100) if total > 0 else 0
-
-    # KPI en días
-    kpi_tiempo = f"{int(promedio//1440)}d {int((promedio%1440)//60)}h {int(promedio%60)}m"
-    kpi_total = str(total)
-    kpi_cancel = f"{cancel} ({porc_cancel:.3f}%)"
+    cancel = dff["Encounter Status"].str.lower().eq("cancelled").sum()
+    pct = cancel / len(dff) * 100 if len(dff) else 0
 
     # =========================
-    # TAB 1 TIEMPOS
+    # FORMATO TIEMPO
+    # =========================
+    def fmt(x):
+        h = int(x // 60)
+        m = int(x % 60)
+        return f"{h}h {m}m"
+
+    # =========================
+    # KPIs
+    # =========================
+    k1 = kpi(
+        "bi bi-clock",
+        "Tiempo Espera Promedio",
+        fmt(promedio),
+        "#dc3545" if promedio > 120 else "#198754",
+        "Alto" if promedio > 120 else "Normal"
+    )
+
+    k2 = kpi(
+        "bi bi-database",
+        "Total Atenciones",
+        f"{total_real:,}",
+        "#198754",
+        "Global"
+    )
+
+    k3 = kpi(
+        "bi bi-check-circle",
+        "Pacientes atendidos ≤ 60 min",
+        f"{sla:.1f}%",
+        "#198754" if sla >= 80 else "#ffc107",
+        "Óptimo" if sla >= 80 else "Mejorable"
+    )
+
+    # =========================
+    # TAB 1 TIEMPOS DE ESPERA
     # =========================
     if tab == "tab1":
 
-        df_time = dff.copy()
+        try:
+            df_t = df_original.copy()
 
-        if df_time.empty:
-            return html.Div("No hay datos"), "-", "-", "-"
+            # =========================
+            # FECHAS
+            # =========================
+            df_t["Check-In Time"] = pd.to_datetime(df_t["Check-In Time"], errors="coerce")
+            df_t["Appt Start Time"] = pd.to_datetime(df_t["Appt Start Time"], errors="coerce")
 
-        # promedio por departamento
-        df_group = df_time.groupby("Department")["Duracion_min"].mean().reset_index()
-        df_group = df_group.sort_values("Duracion_min", ascending=False)
+            # =========================
+            # TIEMPO DE ESPERA REAL (min)
+            # =========================
+            df_t["Wait_real"] = (
+                df_t["Appt Start Time"] - df_t["Check-In Time"]
+            ).dt.total_seconds() / 60
 
-        # texto en días/horas/min
-        df_group["Duracion_txt"] = df_group["Duracion_min"].apply(
-            lambda x: f"{int(x//1440)}d {int((x%1440)//60)}h {int(x%60)}m"
-        )
+            # limpiar datos inválidos
+            df_t = df_t[df_t["Wait_real"].notna()]
+            df_t = df_t[df_t["Wait_real"] >= 0]
 
-        # gráfico
-        fig = px.bar(
-            df_group,
-            x="Department",
-            y="Duracion_min",
-            text="Duracion_txt",
-            title="Tiempo promedio de atención por Departamento"
-        )
+            if df_t.empty:
+                return html.Div("No hay datos válidos para calcular tiempos."), k1, k2, k3
 
-        fig.update_traces(
-            texttemplate='%{text}',
-            textposition='outside',
-        )
+            # =========================
+            # AGRUPACIÓN
+            # =========================
+            df_dep = df_t.groupby("Department").agg(
+                Promedio=("Wait_real", "mean"),
+                P90=("Wait_real", lambda x: x.quantile(0.9)),
+                Total=("Wait_real", "count"),
+                SLA=("Wait_real", lambda x: (x <= 60).mean() * 100)
+            ).reset_index()
 
-        fig.update_layout(
-            height=600,
-            yaxis={'categoryorder': 'total ascending'},
-            xaxis_title="Departamento",
-            yaxis_title="Promedio de Atención",
-            margin=dict(l=150, r=40, t=60, b=40)
-        )
+            df_dep = df_dep.sort_values("Promedio", ascending=False)
 
-        # =========================
-        # INSIGHTS AUTOMÁTICOS
-        # =========================
-        mayor = df_group.iloc[0]
-        menor = df_group.iloc[-1]
+            # =========================
+            # FORMATO TIEMPO
+            # =========================
+            def fmt(x):
+                if pd.isna(x):
+                    return "0h 0m"
+                h = int(x // 60)
+                m = int(x % 60)
+                return f"{h}h {m}m"
 
-        promedio_global = df_time["Duracion_min"].mean()
+            df_dep["Promedio_txt"] = df_dep["Promedio"].apply(fmt)
 
-        # variabilidad
-        diferencia = mayor["Duracion_min"] - menor["Duracion_min"]
-
-        insights = html.Div([
-
-            html.H5("Insights automáticos"),
-
-            html.Ul([
-                html.Li(f"El departamento con mayor tiempo promedio es '{mayor['Department']}' con {mayor['Duracion_txt']}."),
-                html.Li(f"El menor tiempo se observa en '{menor['Department']}' con {menor['Duracion_txt']}."),
-                html.Li(f"El tiempo promedio general es {int(promedio_global//1440)}d {int((promedio_global%1440)//60)}h."),
-                html.Li(f"La diferencia entre el mayor y menor tiempo es significativa ({int(diferencia//60)} horas).")
-            ]),
-
-            html.P(
-                "Se observan diferencias importantes en los tiempos de atención entre departamentos, lo que puede indicar ineficiencias operativas o variabilidad en la complejidad de los casos."
+            # =========================
+            # GRÁFICO
+            # =========================
+            fig = px.bar(
+                df_dep,
+                x="Department",
+                y="Promedio",
+                text="Promedio_txt",
+                title="Tiempo de espera promedio por Departamento"
             )
 
-        ], style={
-            "backgroundColor": "#f8f9fa",
-            "padding": "15px",
-            "borderRadius": "10px"
-        })
+            fig.update_traces(
+                textposition="outside",
+                textfont=dict(size=11)
+            )
 
-        # =========================
-        # LAYOUT
-        # =========================
-        return html.Div([
+            fig.update_layout(
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+                height=550,
+                xaxis_tickangle=-30,
+                xaxis_title="Departamento",
+                yaxis_title="Tiempo de Espera"
+            )
 
-            dbc.Row([
+            # =========================
+            # KPIs
+            # =========================
+            promedio_global = df_t["Wait_real"].mean()
+            p90_global = df_t["Wait_real"].quantile(0.9)
+            sla_global = (df_t["Wait_real"] <= 60).mean() * 100
+
+            top = df_dep.iloc[0]
+            low = df_dep.iloc[-1]
+
+            # =========================
+            # INSIGHTS AUTOMÁTICOS
+            # =========================
+            insights = html.Div([
+
+                html.H5("Insights automáticos"),
+
+                html.P(
+                    f"El departamento con mayor tiempo de espera es '{top['Department']}' con {fmt(top['Promedio'])}."
+                ),
+                html.P(
+                    f"El menor tiempo de espera se observa en '{low['Department']}' con {fmt(low['Promedio'])}."
+                ),
+                html.P(
+                    f"El tiempo promedio general de espera es {fmt(promedio_global)}."
+                ),
+                html.P(
+                    f"El percentil 90 alcanza {fmt(p90_global)}, indicando que un grupo de pacientes experimenta tiempos elevados."
+                ),
+                html.P(
+                    f"El {sla_global:.1f}% de los pacientes es atendido dentro de 60 minutos."
+                ),
+                html.P(
+                    "Existen diferencias entre departamentos que pueden reflejar saturación operativa o cuellos de botella en la atención."
+                ),
+                html.P(
+                    "Se recomienda optimizar los procesos en los departamentos con mayor tiempo de espera."
+                )
+
+            ], style={
+                "backgroundColor": "#f8f9fa",
+                "padding": "15px",
+                "borderRadius": "10px"
+            })
+
+            # =========================
+            # LAYOUT FINAL
+            # =========================
+            return dbc.Row([
 
                 dbc.Col(dcc.Graph(figure=fig), width=8),
 
-                dbc.Col(insights, width=4)
+                dbc.Col([
+                    insights
+                ], width=4)
 
-            ])
+            ]), k1, k2, k3
 
-        ]), kpi_tiempo, kpi_total, kpi_cancel
+        except Exception as e:
+            return html.Div(f"Error en TAB 1: {str(e)}"), k1, k2, k3
 
     # =========================
     # TAB 2 INGRESOS
     # =========================
-    elif tab == "tab2":
+    if tab == "tab2":
 
-        df_ing = dff.copy()
+        # usar dataset ORIGINAL sin filtros
+        df_ing = df_original.copy()
 
-        df_ing = df_ing.dropna(subset=["Admit Type"])
+        # limpiar texto
+        df_ing["Admit Type"] = (
+            df_ing["Admit Type"]
+            .astype(str)
+            .str.strip()
+            .replace("nan", "No definido")
+        )
 
-        if df_ing.empty:
-            return html.Div("No hay datos"), kpi_tiempo, kpi_total, kpi_cancel
+        # =========================
+        # CONTEO REAL
+        # =========================
+        df_count = (
+            df_ing.groupby("Admit Type")
+            .size()
+            .reset_index(name="Total")
+            .sort_values("Total", ascending=False)
+        )
 
-        # conteo
-        df_count = df_ing["Admit Type"].value_counts().reset_index()
-        df_count.columns = ["Admit Type", "Total"]
-
-        # porcentaje
         total = df_count["Total"].sum()
-        df_count["Porcentaje"] = df_count["Total"] / total * 100
+        df_count["Porcentaje"] = (df_count["Total"] / total) * 100
 
-        # gráfico
+        # =========================
+        # GRÁFICO
+        # =========================
         fig = px.bar(
             df_count,
             x="Admit Type",
             y="Total",
-            text="Total",
-            title="Tipos de ingreso"
+            text=df_count["Total"].apply(lambda x: f"{x:,}"),
+            title="Tipos de Ingreso"
         )
 
-        fig.update_traces(textposition="inside")
+        fig.update_traces(textposition="outside")
 
         fig.update_layout(
-            height=350,
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            title_x=0.5,
+            height=600,
             xaxis_title="Tipo de ingreso",
-            yaxis_title="Número de atenciones"
+            yaxis_title="Número de atenciones",
+            xaxis_tickangle=-45,
+            margin=dict(l=60, r=20, t=60, b=120)
         )
 
         # =========================
-        # INSIGHTS AUTOMÁTICOS
+        # INSIGHTS AUTOMÁTICOS 
         # =========================
         top = df_count.iloc[0]
         low = df_count.iloc[-1]
@@ -283,15 +388,18 @@ def render(tab, dep, status, start, end):
 
             html.H5("Insights automáticos"),
 
-            html.Ul([
-                html.Li(f"El tipo de ingreso más frecuente es '{top['Admit Type']}' con {top['Total']} atenciones ({top['Porcentaje']:.1f}%)."),
-                html.Li(f"El tipo menos frecuente es '{low['Admit Type']}' con {low['Total']} atenciones ({low['Porcentaje']:.1f}%)."),
-                html.Li(f"Total de atenciones analizadas: {int(total)}.")
-            ]),
-
+            html.P(
+                f"El tipo de ingreso más frecuente es '{top['Admit Type']}' con {int(top['Total'])} atenciones ({top['Porcentaje']:.1f}%)."
+            ),
+            html.P(
+                f"El tipo menos frecuente es '{low['Admit Type']}' con {int(low['Total'])} atenciones ({low['Porcentaje']:.1f}%)."
+            ),
+            html.P(
+                f"Total de atenciones analizadas: {int(total)}."
+            ),
             html.P(
                 "Se observa concentración en ciertos tipos de ingreso, lo que puede indicar dependencia operativa."
-            )
+            ),
 
         ], style={
             "backgroundColor": "#f8f9fa",
@@ -302,330 +410,347 @@ def render(tab, dep, status, start, end):
         # =========================
         # LAYOUT
         # =========================
-        return html.Div([
-
-            dbc.Row([
-
-                dbc.Col(dcc.Graph(figure=fig), width=8),
-
-                dbc.Col(insights, width=4)
-
-            ])
-
-        ]), kpi_tiempo, kpi_total, kpi_cancel
-
+        return dbc.Row([
+            dbc.Col(dcc.Graph(figure=fig), width=8),
+            dbc.Col(insights, width=4)
+        ]), k1, k2, k3
+    
     # =========================
-    # TAB 3 CALIDAD POR CLINICA
+    # TAB 3 CALIDAD
     # =========================
-    elif tab == "tab3":
+    
+    if tab == "tab3":
 
-        df_cal = dff.copy()
+            # DATASET ORIGINAL
+            df_cal = df_original.copy()
 
-        # limpiar
-        df_cal["Care Score"] = pd.to_numeric(df_cal["Care Score"], errors="coerce")
-        df_cal = df_cal.dropna(subset=["Care Score", "Clinic Name"])
+            # =========================
+            # LIMPIEZA
+            # =========================
+            df_cal = df_cal[["Department", "Care Score"]].dropna()
 
-        if df_cal.empty:
-            return html.Div("No hay datos"), kpi_tiempo, kpi_total, kpi_cancel
-
-        # promedio por clínica
-        df_avg = df_cal.groupby("Clinic Name")["Care Score"].mean().reset_index()
-
-        # ordenar
-        df_avg = df_avg.sort_values("Care Score", ascending=False)
-
-        # =========================
-        # CLASIFICACIÓN
-        # =========================
-        def clasificar(score):
-            if score < 5:
-                return "Baja"
-            elif score < 8:
-                return "Media"
-            else:
-                return "Alta"
-
-        def estado_sistema(score):
-            if score < 5:
-                return "CRÍTICO", "#dc3545"
-            elif score < 8:
-                return "ACEPTABLE", "#ffc107"
-            else:
-                return "ÓPTIMO", "#198754"
-
-        df_avg["Nivel"] = df_avg["Care Score"].apply(clasificar)
-
-        # =========================
-        # GRÁFICO
-        # =========================
-        fig = px.bar(
-            df_avg,
-            x="Clinic Name",
-            y="Care Score",
-            color="Nivel",
-            text="Care Score",
-            title="Calidad promedio por clínica",
-            color_discrete_map={
-                "Alta": "#198754",   # verde
-                "Media": "#ffc107",  # naranja
-                "Baja": "#dc3545"    # rojo
-            }
-        )
-
-        # texto dentro para no romper layout
-        fig.update_traces(
-            texttemplate='%{text:.2f}',
-            textposition='inside'
-        )
-
-        # altura controlada
-        fig.update_layout(
-            height=350,
-            margin=dict(l=20, r=20, t=40, b=40),
-            xaxis_title="Clínica",
-            yaxis_title="Promedio Care Score",
-            xaxis_tickangle=-45
-        )
-        # =========================
-        # KPIs INTERNOS
-        # =========================
-        mejor = df_avg.iloc[0]
-        peor = df_avg.iloc[-1]
-
-        promedio_global = df_cal["Care Score"].mean()
-        nivel_global = clasificar(promedio_global)
-        estado, color = estado_sistema(promedio_global)
-
-        # =========================
-        # SEMÁFORO DEL SISTEMA
-        # =========================
-        return html.Div([
-            html.Div([
-                html.H4(
-                    f"Estado del sistema: {estado}",
-                    style={
-                        "color": "white",
-                        "backgroundColor": color,
-                        "padding": "12px",
-                        "borderRadius": "8px",
-                        "textAlign": "center"
-                    }
+            # =========================
+            # CÁLCULO CORRECTO
+            # =========================
+            df_cal = (
+                df_cal
+                .groupby("Department", as_index=False)
+                .agg(
+                    total_score=("Care Score", "sum"),
+                    total_atenciones=("Care Score", "count")
                 )
-            ], style={"marginBottom": "20px"}),
+            )
 
-            # LAYOUT
-            dbc.Row([
+            df_cal["Care Score"] = df_cal["total_score"] / df_cal["total_atenciones"]
 
-                # GRÁFICO
-            dbc.Col(
-                dcc.Graph(figure=fig),
-                width=8
-            ),
+            # =========================
+            # ORDEN
+            # =========================
+            df_cal = df_cal.sort_values("Care Score", ascending=False)
 
+            # =========================
+            # CLASIFICACIÓN
+            # =========================
+            def nivel(x):
+                if x <= 4:
+                    return "Baja"
+                elif x <= 7:
+                    return "Media"
+                else:
+                    return "Alta"
+
+            df_cal["Nivel"] = df_cal["Care Score"].apply(nivel)
+
+            # =========================
+            # GRÁFICO
+            # =========================
+            fig = px.bar(
+                df_cal,
+                x="Department",
+                y="Care Score",
+                text=df_cal["Care Score"].round(2),
+                color="Nivel",
+                color_discrete_map={
+                    "Baja": "#dc3545",
+                    "Media": "#ffc107",
+                    "Alta": "#198754"
+                },
+                title="Calificación Promedio por Departamento"
+            )
+
+            fig.update_traces(textposition="outside")
+
+            fig.update_layout(
+                xaxis_tickangle=-45,
+                height=650
+            )
+
+            # =========================
             # INSIGHTS
-            dbc.Col([
+            # =========================
+            max_row = df_cal.iloc[0]
+            min_row = df_cal.iloc[-1]
+            promedio = df_cal["Care Score"].mean()
+
+            # estado
+            if promedio <= 4:
+                estado = "CRÍTICO"
+                color_estado = "#dc3545"
+                icono = "🔴"
+            elif promedio <= 7:
+                estado = "MEDIO"
+                color_estado = "#ffc107"
+                icono = "🟡"
+            else:
+                estado = "ÓPTIMO"
+                color_estado = "#198754"
+                icono = "🟢"
+
+            banner = html.Div(
+                f"ESTADO DEL SISTEMA: {estado}",
+                style={
+                    "backgroundColor": color_estado,
+                    "color": "white",
+                    "padding": "15px",
+                    "textAlign": "center",
+                    "fontWeight": "bold",
+                    "fontSize": "22px",
+                    "borderRadius": "10px",
+                    "marginBottom": "15px"
+                }
+            )
+
+            insights = html.Div([
 
                 html.H5("Insights automáticos"),
 
-                html.Div([
+                html.P("🔴 Baja (1–4)"),
+                html.P("🟡 Media (5–7)"),
+                html.P("🟢 Alta (8–10)"),
 
-                    html.P("Escala de calidad:"),
-                    html.P("🔴 Baja (1–4)"),
-                    html.P("🟡 Media (5–7)"),
-                    html.P("🟢 Alta (8–10)"),
+                html.Br(),
 
-                    html.Hr(),
+                html.P(f"Calificación más alta: {max_row['Department']} ({max_row['Care Score']:.2f})"),
+                html.P(f"Calificación más baja: {min_row['Department']} ({min_row['Care Score']:.2f})"),
+                html.P(f"Promedio general: {promedio:.2f}"),
 
-                    html.Ul([
-                        html.Li(f"Mejor clínica: {mejor['Clinic Name']} ({mejor['Care Score']:.2f}) → {clasificar(mejor['Care Score'])}"),
-                        html.Li(f"Peor clínica: {peor['Clinic Name']} ({peor['Care Score']:.2f}) → {clasificar(peor['Care Score'])}"),
-                        html.Li(f"Promedio general: {promedio_global:.2f} → {nivel_global}")
-                    ]),
+                html.Br(),
 
-                    html.Hr(),
+                html.P(f"{icono} El sistema presenta un nivel {estado} de calidad.")
 
-                    html.P(
-                        "🔴 El sistema presenta un nivel CRÍTICO de calidad. Requiere intervención inmediata."
-                        if estado == "CRÍTICO" else
-                        "🟡 El sistema es ACEPTABLE pero requiere mejoras."
-                        if estado == "ACEPTABLE" else
-                        "🟢 El sistema presenta un nivel ÓPTIMO de calidad."
-                    )
+            ])
 
-                ], style={
-                    "backgroundColor": "#f8f9fa",
-                    "padding": "15px",
-                    "borderRadius": "10px"
-                })
+            return html.Div([
+                banner,
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=fig), width=8),
+                    dbc.Col(insights, width=4)
+                ])
+            ]), k1, k2, k3
 
-            ], width=4)
 
-        ])
-
-    ]), kpi_tiempo, kpi_total, kpi_cancel
-        
-
-           
+    # TAB 4 TOP 10 DIAGNOSTICOS
     # =========================
-    # TAB 4 ATENCIONES POR DIAGNOSTICOS
-    # =========================
-    elif tab == "tab4":
+    if tab == "tab4":
 
         df_diag = dff.copy()
 
-        # limpiar
-        df_diag = df_diag.dropna(subset=["Diagnosis Primary", "Admit Source"])
+        # =========================
+        # LIMPIEZA SIN PERDER DATOS
+        # =========================
+        df_diag["Diagnosis Primary"] = df_diag["Diagnosis Primary"].fillna("No definido")
+        df_diag["Department"] = df_diag["Department"].fillna("No definido")
 
-        if df_diag.empty:
-            return html.Div("No hay datos"), kpi_tiempo, kpi_total, kpi_cancel
-
-        # contar
-        df_group = (
-            df_diag.groupby(["Diagnosis Primary", "Admit Source"])
-            .size()
-            .reset_index(name="Total")
-        )
-
-        # TOP 10 diagnósticos
+        # =========================
+        # TOP 10 DIAGNÓSTICOS
+        # =========================
         top_diag = (
-            df_group.groupby("Diagnosis Primary")["Total"]
-            .sum()
-            .nlargest(10)
+            df_diag["Diagnosis Primary"]
+            .value_counts()
+            .head(10)
             .index
         )
 
-        df_group = df_group[df_group["Diagnosis Primary"].isin(top_diag)]
+        df_diag = df_diag[df_diag["Diagnosis Primary"].isin(top_diag)]
 
-        # porcentaje dentro de cada origen
-        df_group["Porcentaje"] = df_group.groupby("Admit Source")["Total"]\
-            .transform(lambda x: x / x.sum() * 100)
-
-        # eliminar ruido
-        df_group = df_group[df_group["Porcentaje"] > 2]
-
-        # acortar nombres
-        df_group["Diagnosis Primary"] = df_group["Diagnosis Primary"].str.slice(0, 25)
-
-        # pivot
-        pivot = df_group.pivot(
-            index="Diagnosis Primary",
-            columns="Admit Source",
-            values="Porcentaje"
-        ).fillna(0)
-
-        # gráfico heatmap
-        fig = px.imshow(
-            pivot,
-            text_auto=".1f",
-            aspect="auto",
-            color_continuous_scale="Blues",
-            title="Distribución (%) de diagnósticos por origen"
+        # =========================
+        # TABLA CRUZADA
+        # =========================
+        tabla = pd.crosstab(
+            df_diag["Diagnosis Primary"],
+            df_diag["Department"]
         )
 
-        # mejoras visuales
-        fig.update_traces(
-            texttemplate="%{z:.1f}",
-            textfont={"size": 11}
+        # =========================
+        # % POR DEPARTAMENTO
+        # =========================
+        tabla_pct = tabla.div(tabla.sum(axis=0), axis=1) * 100
+
+        # =========================
+        # HEATMAP
+        # =========================
+        fig = px.imshow(
+            tabla_pct.round(1),
+            text_auto=True,
+            aspect="auto",
+            color_continuous_scale="Blues",
+            title="Top 10 diagnósticos (% por Departamento)"
         )
 
         fig.update_layout(
-            height=500,
-            margin=dict(l=180, r=40, t=60, b=100),
-            xaxis=dict(
-                tickangle=0,
-                tickfont=dict(size=10)
-            ),
-            xaxis_title="Origen de ingreso",
-            yaxis_title="Diagnóstico"
+            xaxis_title="Departamento",
+            yaxis_title="Diagnóstico",
+            height=600
         )
 
         # =========================
-        # INSIGHT AUTOMÁTICO
+        # INSIGHTS
         # =========================
-        insights = []
+        insights_list = []
 
-        if not pivot.empty:
-            for col in pivot.columns:
-                if pivot[col].sum() > 0:
-                    top_diag = pivot[col].idxmax()
-                    top_val = pivot[col].max()
+        for col in tabla_pct.columns:
 
-                    insights.append(
-                        f"En {col}, el diagnóstico más frecuente es '{top_diag}' con {top_val:.1f}%."
-                    )
+            col_data = tabla_pct[col]
 
-        if insights:
-            insight_text = html.Ul([html.Li(i) for i in insights])
-        else:
-            insight_text = html.P("No hay patrones suficientes para generar insights.")
-        return html.Div([
-            dcc.Graph(figure=fig),
-            html.H5("Insights automáticos"),
-            insight_text
-        ]), kpi_tiempo, kpi_total, kpi_cancel
-        
+            if col_data.sum() == 0:
+                continue
+
+            top_d = col_data.idxmax()
+            top_v = col_data.max()
+
+            insights_list.append(
+                html.P(
+                    f"En {col}, el diagnóstico más frecuente es '{top_d}' con {top_v:.1f}%."
+                )
+            )
+
+        insights = html.Div(
+            [html.H5("Insights automáticos")] + insights_list,
+            style={
+                "backgroundColor": "#f8f9fa",
+                "padding": "15px",
+                "borderRadius": "10px"
+            }
+        )
+
+        return dbc.Row([
+            dbc.Col(dcc.Graph(figure=fig), width=8),
+            dbc.Col(insights, width=4)
+        ]), k1, k2, k3
+
+
 
     # =========================
-    # TAB 5 VOLUMEN
+    # TAB 5 VOLUMEN MENSUAL
     # =========================
-    elif tab == "tab5":
+    
+    if tab == "tab5":
 
         df_vol = dff.copy()
 
-        # FILTRO ESTRICTO SOLO 2014
-        df_vol = df_vol[
-            (df_vol["Appt Start Time"].dt.year == 2014)
-        ]
+        # =========================
+        # FECHA (CHECK-IN)
+        # =========================
+        df_vol["Check-In Time"] = pd.to_datetime(
+            df_vol["Check-In Time"], errors="coerce"
+        )
 
-        # agrupar por mes real (fecha)
-        df_vol["Mes"] = df_vol["Appt Start Time"].dt.to_period("M").dt.to_timestamp()
+        # =========================
+        # AGRUPACIÓN MENSUAL
+        # =========================
+        df_vol["Mes"] = df_vol["Check-In Time"].dt.to_period("M").astype(str)
 
-        df_vol = df_vol.groupby("Mes").size().reset_index(name="Total")
+        df_mensual = (
+            df_vol
+            .groupby("Mes")
+            .size()
+            .reset_index(name="Atenciones")
+            .sort_values("Mes")
+        )
 
-        # gráfico
+        # =========================
+        # GRÁFICO (LÍNEA + ETIQUETAS)
+        # =========================
         fig = px.line(
-            df_vol,
+            df_mensual,
             x="Mes",
-            y="Total",
+            y="Atenciones",
             markers=True,
-            text="Total",
-            title="Tendencia mensual de atenciones"
+            title="Tendencia Mensual de Atenciones"
         )
 
-        fig.update_traces(textposition="top center")
+        fig.update_traces(
+            mode="lines+markers+text",
+            text=[f"{v:,}" for v in df_mensual["Atenciones"]],
+            textposition="top center",
+            line=dict(width=4, color="#2563eb"),
+            marker=dict(size=10, color="#2563eb")
+        )
 
+        # =========================
+        # EJE Y PERSONALIZADO
+        # =========================
+        y_max = df_mensual["Atenciones"].max()
+
+        fig.update_yaxes(
+            range=[2200, y_max + 50],  # no corta el valor máximo
+            tick0=2200,
+            dtick=200
+        )
+
+        # =========================
+        # ESTILO
+        # =========================
         fig.update_layout(
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            height=500,
             xaxis_title="Mes",
-            yaxis_title="Número de atenciones"
+            yaxis_title="Número de atenciones",
+            title_x=0.5,
+            margin=dict(t=60, b=60),
+            yaxis=dict(showgrid=True, gridcolor="#e5e7eb"),
+            xaxis=dict(showgrid=False)
         )
 
         # =========================
-        # INSIGHT AUTOMÁTICO
+        # INSIGHTS
         # =========================
-        if not df_vol.empty:
-            max_mes = df_vol.loc[df_vol["Total"].idxmax()]
-            min_mes = df_vol.loc[df_vol["Total"].idxmin()]
+        max_row = df_mensual.loc[df_mensual["Atenciones"].idxmax()]
+        min_row = df_mensual.loc[df_mensual["Atenciones"].idxmin()]
+        promedio = df_mensual["Atenciones"].mean()
 
-            insight = html.Ul([
-                html.Li(f"El mes con mayor volumen en atenciones fue {max_mes['Mes'].strftime('%Y-%m')} con {max_mes['Total']} atenciones."),
-                html.Li(f"El mes con menor volumen en atenciones fue {min_mes['Mes'].strftime('%Y-%m')} con {min_mes['Total']} atenciones.")
-            ])
-        else:
-            insight = html.P("No hay datos suficientes.")
+        insights = html.Div([
 
-        return html.Div([
-            dcc.Graph(figure=fig),
             html.H5("Insights automáticos"),
-            insight
-        ]), kpi_tiempo, kpi_total, kpi_cancel
 
-    # fallback obligatorio
-        return html.Div("Seleccione una opción"), kpi_tiempo, kpi_total, kpi_cancel
+            html.P(
+                f"El mes con mayor volumen fue {max_row['Mes']} con {int(max_row['Atenciones'])} atenciones."
+            ),
+            html.P(
+                f"El mes con menor volumen fue {min_row['Mes']} con {int(min_row['Atenciones'])} atenciones."
+            ),
+            html.P(
+                f"El promedio mensual es {promedio:.0f} atenciones."
+            ),
+            html.P(
+                "Se observa una tendencia variable durante el año, con picos en marzo y octubre, y una caída marcada hacia fin de año."
+            )
 
+        ], style={
+            "backgroundColor": "#f8f9fa",
+            "padding": "15px",
+            "borderRadius": "10px"
+        })
 
-    # =========================
-    # RUN
-    # =========================
+        # =========================
+        # LAYOUT FINAL
+        # =========================
+        return dbc.Row([
+            dbc.Col(dcc.Graph(figure=fig), width=8),
+            dbc.Col(insights, width=4)
+        ]), k1, k2, k3
+
 if __name__ == "__main__":
-        print("LLEGUE AL FINAL")
-        app.run(debug=True, port=8050)
+    print("CALLBACK EJECUTADO")
+    app.run(debug=True, port=8050)
